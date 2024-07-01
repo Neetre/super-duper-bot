@@ -1,28 +1,27 @@
-import getpass
 import os
-import pathlib
-import textwrap
 
 import discord
 from discord.ext import commands
-import google.generativeai as genai
 
-from IPython.display import display
-from IPython.display import Markdown
-
-if "GOOGLE_API_KEY" not in os.environ:
-    os.environ["GOOGLE_API_KEY"] = getpass.getpass("Provide your Google API Key")
-
-def to_markdown(text):
-  text = text.replace('•', '  *')
-  return Markdown(textwrap.indent(text, '> ', predicate=lambda _: True))
-
-GOOGLE_API_KEY=os.environ["GOOGLE_API_KEY"]
-
-genai.configure(api_key=GOOGLE_API_KEY)
-
-model = genai.GenerativeModel('gemini-1.5-flash')
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_groq import ChatGroq
 
 
-response = model.generate_content("What is the meaning of life?")
-to_markdown(response.text)
+class chat_cog(commands.Cog):
+    def __init__(self, bot, GROQ_API_KEY):
+        self.bot = bot
+        self.chat = ChatGroq(temperature=0, groq_api_key=GROQ_API_KEY, model_name="mixtral-8x7b-32768")
+
+    @commands.command(name='chat', aliases=['c'], help='Chat with the bot')
+    async def chat(self, ctx, *, message):
+        human = "{text}"
+        prompt = ChatPromptTemplate.from_messages([("human", human)])
+
+        chain = prompt | self.chat
+        response = chain.invoke({"text": message})
+        text_response = response.content
+        await ctx.send(text_response)
+
+    @commands.Cog.listener()
+    async def on_ready(self):
+        print(f'{self.bot.user} has connected to Discord!')

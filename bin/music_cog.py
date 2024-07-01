@@ -164,7 +164,7 @@ class music_cog(commands.Cog):
         retval= ''
 
         for i in range(0, len(self.music_queue)):
-            retval += f'{i+1}. {self.music_queue[i][0]['title']}\n'
+            retval += f"{i+1}. {self.music_queue[i][0]['title']}\n"
 
         if retval != "":
             await ctx.send(retval)
