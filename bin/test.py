@@ -1,7 +1,7 @@
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_groq import ChatGroq
 
-chat = ChatGroq(temperature=0, groq_api_key="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", model_name="mixtral-8x7b-32768")
+chat = ChatGroq(temperature=0, groq_api_key="", model_name="mixtral-8x7b-32768")
 
 system = "You are a helpful assistant."
 human = "{text}"
