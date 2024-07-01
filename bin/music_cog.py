@@ -27,6 +27,43 @@ class music_cog(commands.Cog):
         }
         self.vc = None
 
+    def search_playlist_yt(self, item):
+        with YoutubeDL(self.YDL_OPTIONS) as ydl:
+            try:
+                info = ydl.extract_info(item, download=False)
+            except Exception as e:
+                logging.error(f'Error occurred while extracting info from YouTube: {e}')
+                return False
+        
+        playlist = []
+        for entry in info['entries']:
+            print(entry['title'])
+            audio_url = None
+            for format in entry['formats']:
+                if format.get('acodec') and format['acodec'].lower() != 'none':
+                    audio_url = format['url']
+                    break
+            if audio_url:
+                playlist.append({'source': audio_url, 'title': entry['title']})
+        return playlist
+    
+    @commands.command(name='playlist', aliases=['pl'], help='Plays the playlist from yt')
+    async def playlist(self, ctx, playlist_link):
+        voice_channel = ctx.author.voice.channel
+        if voice_channel is None:
+            await ctx.send("You are not in a voice channel.")
+            return
+        await ctx.send("Searching 🔎")
+        playlist = self.search_playlist_yt(playlist_link)
+        if not playlist:
+            await ctx.send("Could not download the playlist. Incorrect format try another keyword.")
+            return
+        for video in playlist:
+            self.music_queue.append([video, voice_channel])
+
+        if self.is_playing == False:
+            await self.play_music(ctx)
+
     def search_yt(self, item):
         with YoutubeDL(self.YDL_OPTIONS) as ydl:
             try:

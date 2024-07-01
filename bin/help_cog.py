@@ -17,8 +17,8 @@ For music:
 !leave - Leave the voice channel
 
 For chatbot:
-!chat
-!quit
+!chat <l> or <r> <message> - Chat with the bot, <l> uses history, <r> doesn't use history
+!cclear - Clear the chat history
 ```
 """
         self.text_channel_name = 'your-channel-name'
