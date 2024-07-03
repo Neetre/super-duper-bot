@@ -9,6 +9,10 @@ This is a bot that offers a variety of features, such as:
 
 It is built using the [Discord API](https://discord.com/developers/docs/intro) and the [Groq API](https://groq.com).
 
+Coming soon:
+
+- Playlist management;
+
 ## Requirements
 
 python >= 3.9
