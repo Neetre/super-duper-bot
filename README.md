@@ -7,7 +7,7 @@ This is a bot that offers a variety of features, such as:
 - Music player;
 - Chatbot, implemented with a real AI;
 
-It is built using the [Discord API]() and the [Groq API]().
+It is built using the [Discord API](https://discord.com/developers/docs/intro) and the [Groq API](https://groq.com).
 
 ## Requirements
 
