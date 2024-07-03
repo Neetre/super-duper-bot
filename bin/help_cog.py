@@ -1,6 +1,7 @@
 import discord
 from discord.ext import commands
 
+import logging
 
 class help_cog(commands.Cog):
     def __init__(self, bot):
@@ -35,7 +36,7 @@ For chatbot:
                     try:
                         await channel.send(self.help_msg)
                     except discord.Forbidden:
-                        print(f"Bot doesn't have permission to send messages in {channel.name} of {guild.name}.")
+                        logging.error(f"Bot doesn't have permission to send messages in {channel.name} of {guild.name}.")
 
     @commands.command(name='help', help='Shows this message')
     async def help_command(self, ctx, *args):

@@ -18,14 +18,17 @@ class chat_cog(commands.Cog):
         self.data = self.load_data()
 
     @commands.command(name='chat', aliases=['c'], help='Chat with the bot')
-    async def chat(self, ctx, *, message):
-        message = message.strip().split(" ")
-        if message[0] == "l":
-            if self.data is not None:
-                message = self.data[-1]["output"] + " " + message if len(self.data) > 0 else message  # Append the last response to the message if it exists
+    async def chat(self, ctx, *message):
+        print(message)
+        message = " ".join(message)
+        print(message)
+        if message is None and len(message) == 0:
+            await ctx.send("Please provide a message to chat with the bot.")
+            return
 
-        elif message[0] == "r":
-            message = message[1]
+        message = message.strip()
+        if self.data is not None:
+            message = self.data[-1]["output"] + " " + message if len(self.data) > 0 else message # Append the last response to the message if it exists
 
         system = "You are a helpful assistant."
         human = "{text}"

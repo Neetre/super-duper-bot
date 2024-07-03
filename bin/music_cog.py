@@ -2,7 +2,7 @@ import discord
 from discord.ext import commands
 from yt_dlp import YoutubeDL
 import logging
-import subprocess
+import asyncio
 
 
 class music_cog(commands.Cog):
@@ -13,38 +13,45 @@ class music_cog(commands.Cog):
 
         self.music_queue = []
         self.YDL_OPTIONS = {
-            'format' : 'bestaudio/best',
-            'postprocessors' : [{
-                'key' : 'FFmpegExtractAudio',
-                'preferredcodec' : 'mp3',
-                'preferredquality' : '192',
+            'format': 'bestaudio/best',
+            'postprocessors': [{
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': 'mp3',
+                'preferredquality': '192',
             }],
-            'outtmpl' : 'downloaded_audio.%(ext)s'
+            'outtmpl': 'downloaded_audio.%(ext)s'
         }
         self.FFMPEG_OPTIONS = {
-            'before_options' : '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
-            'options' : '-vn -nostdin'
+            'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
+            'options': '-vn -nostdin'
         }
         self.vc = None
 
-    def search_playlist_yt(self, item):
+    async def search_playlist_yt(self, item):
         with YoutubeDL(self.YDL_OPTIONS) as ydl:
             try:
                 info = ydl.extract_info(item, download=False)
             except Exception as e:
                 logging.error(f'Error occurred while extracting info from YouTube: {e}')
-                return False
-        
+                return []
+
+        if 'entries' not in info:
+            return []
+
         playlist = []
         for entry in info['entries']:
-            print(entry['title'])
-            audio_url = None
-            for format in entry['formats']:
-                if format.get('acodec') and format['acodec'].lower() != 'none':
-                    audio_url = format['url']
-                    break
-            if audio_url:
-                playlist.append({'source': audio_url, 'title': entry['title']})
+            try:
+                print(entry['title'])
+                audio_url = None
+                for format in entry['formats']:
+                    if format.get('acodec') and format['acodec'].lower() != 'none':
+                        audio_url = format['url']
+                        break
+                if audio_url:
+                    playlist.append({'source': audio_url, 'title': entry['title']})
+            except Exception as e:
+                logging.error(f"Error processing entry {entry.get('id', 'unknown')}: {e}")
+        
         return playlist
     
     @commands.command(name='playlist', aliases=['pl'], help='Plays the playlist from yt')
@@ -54,20 +61,20 @@ class music_cog(commands.Cog):
             await ctx.send("You are not in a voice channel.")
             return
         await ctx.send("Searching 🔎")
-        playlist = self.search_playlist_yt(playlist_link)
+        playlist = await self.search_playlist_yt(playlist_link)
         if not playlist:
             await ctx.send("Could not download the playlist. Incorrect format try another keyword.")
             return
         for video in playlist:
             self.music_queue.append([video, voice_channel])
 
-        if self.is_playing == False:
+        if not self.is_playing:
             await self.play_music(ctx)
 
-    def search_yt(self, item):
+    async def search_yt(self, item):
         with YoutubeDL(self.YDL_OPTIONS) as ydl:
             try:
-                info = ydl.extract_info("ytsearch:%s" % item, download=False)['entries'][0]
+                info = ydl.extract_info(f"ytsearch:{item}", download=False)['entries'][0]
             except Exception as e:
                 logging.error(f"Error occurred while extracting info from YouTube: {e}")
                 return False
@@ -91,18 +98,7 @@ class music_cog(commands.Cog):
             m_url = self.music_queue[0][0]['source']
             self.music_queue.pop(0)
 
-            try:
-                process = subprocess.Popen(['ffmpeg', '-i', m_url, '-f', 'null', '-'], stderr=subprocess.PIPE)
-                _, stderr = process.communicate()
-
-                if process.returncode != 0:
-                    logging.error(f"FFmpeg returned error code: {process.returncode}")
-                    logging.debug(f"Stderr: {stderr.decode()}")
-                else:
-                    self.vc.play(discord.FFmpegPCMAudio(executable='ffmpeg', source=m_url), after=lambda e: self.play_next())
-            except Exception as e:
-                logging.error(f"Error occurred while playing the song: {e}")
-                self.is_playing = False
+            self.vc.play(discord.FFmpegPCMAudio(m_url, **self.FFMPEG_OPTIONS), after=lambda e: self.play_next())
         else:
             self.is_playing = False
 
@@ -112,7 +108,7 @@ class music_cog(commands.Cog):
 
             m_url = self.music_queue[0][0]['source']
 
-            if self.vc == None or not self.vc.is_connected():
+            if self.vc is None or not self.vc.is_connected():
                 self.vc = await self.music_queue[0][1].connect()
                 if self.vc is None:
                     await ctx.send("Error connecting to voice channel.")
@@ -120,30 +116,29 @@ class music_cog(commands.Cog):
             else:
                 await self.vc.move_to(self.music_queue[0][1])
 
-            print(self.music_queue)
             self.music_queue.pop(0)
 
-            try:
-                process = subprocess.Popen(['ffmpeg', '-i', m_url, '-f', 'null', '-'], stderr=subprocess.PIPE)
-                _, stderr = process.communicate()
+            self.vc.play(discord.FFmpegPCMAudio(m_url, **self.FFMPEG_OPTIONS), after=lambda e: self.play_next())
 
-                if process.returncode != 0:
-                    logging.error(f"FFmpeg returned error code: {process.returncode}")
-                    logging.debug(f"Stderr: {stderr.decode()}")
-                else:
-                    self.vc.play(discord.FFmpegPCMAudio(executable='ffmpeg', source=m_url), after=lambda e: self.play_next())
-            except Exception as e:
-                logging.error(f"Error occurred while playing the song: {e}")
-                self.is_playing = False
-        else:
-            self.is_playing = False
+            # Start downloading the rest of the playlist while playing
+            asyncio.create_task(self.download_remaining_songs())
+
+    async def download_remaining_songs(self):
+        while self.is_playing and len(self.music_queue) > 0:
+            song = self.music_queue[0][0]
+            with YoutubeDL(self.YDL_OPTIONS) as ydl:
+                try:
+                    ydl.download([song['source']])
+                except Exception as e:
+                    logging.error(f"Error occurred while downloading the song: {e}")
+            await asyncio.sleep(1)  # Adjust sleep time if needed
 
     @commands.command(name='play', aliases=['p', 'playing'], help='Plays the song from yt')
-    async def play(self, ctx, source, *args):
+    async def play(self, ctx, *args):
         query = " ".join(args)
-        voice_channel  = ctx.author.voice.channel
+        voice_channel = ctx.author.voice.channel
         if voice_channel is None:
-            await ctx.send("You are nont in a voice channel!")
+            await ctx.send("You are not in a voice channel!")
 
         elif self.is_paused:
             self.vc.resume()
@@ -151,14 +146,14 @@ class music_cog(commands.Cog):
         else:
             await ctx.send("Searching 🔎")
             
-            song = self.search_yt(query)
+            song = await self.search_yt(query)
 
-            if type(song) == type(True):
+            if not song:
                 await ctx.send("Could not download the song. Incorrect format try another keyword")
             else:
                 await ctx.send(f"Added {song['title']} to the queue.")
                 self.music_queue.append([song, voice_channel])
-                if self.is_playing == False:
+                if not self.is_playing:
                     await self.play_music(ctx)
 
     @commands.command(name='pause', help='Pauses the song')
@@ -210,14 +205,14 @@ class music_cog(commands.Cog):
 
     @commands.command(name='clear', hepl='Clears the queue')
     async def clear(self, ctx, *args):
-        if self.vc != None and self.vc.is_playing():
+        if self.vc is not None and self.vc.is_playing():
             self.vc.stop()
         self.music_queue = []
         await ctx.send("Queue cleared.")
 
     @commands.command(name='leave', aliases=['l'], help="Leaves the voice channel")
     async def leave(self, ctx, *args):
-        if self.vc != None:
+        if self.vc is not None:
             await self.vc.disconnect()
             self.is_paused = False
             self.is_playing = False
