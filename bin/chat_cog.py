@@ -14,7 +14,7 @@ from langchain_groq import ChatGroq
 class chat_cog(commands.Cog):
     def __init__(self, bot, GROQ_API_KEY):
         self.bot = bot
-        self.chat = ChatGroq(temperature=1, groq_api_key=GROQ_API_KEY, model_name="mixtral-8x7b-32768")
+        self.chat = ChatGroq(temperature=1, groq_api_key=GROQ_API_KEY, model_name="llama-3.1-70b-versatile")
         self.data = self.load_data()
 
     @commands.command(name='chat', aliases=['c'], help='Chat with the bot')
@@ -37,7 +37,10 @@ class chat_cog(commands.Cog):
         chain = prompt | self.chat
         response = chain.invoke({"text": message})
         text_response = response.content
-        self.data.append({"input":message, "output":text_response})
+        new_data = {"input":message, "output":text_response}
+        self.data.append(new_data)
+        self.save_data()
+        
         await ctx.send(text_response)
 
     @commands.Cog.listener()
