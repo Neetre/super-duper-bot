@@ -9,12 +9,15 @@ from help_cog import help_cog
 from music_cog import music_cog
 from chat_cog import chat_cog
 
+from dotenv import load_dotenv
+load_dotenv()
 
-if "DISCORD_TOKEN" not in os.environ:
-    os.environ["DISCORD_TOKEN"] = getpass.getpass("Provide your Discord Token ---> ")
 
-if "GROQ_API_KEY" not in os.environ:
-    os.environ["GROQ_API_KEY"] = getpass.getpass("Provide your Groq API Key ---> ")
+# if "DISCORD_TOKEN" not in os.environ:
+#     os.environ["DISCORD_TOKEN"] = getpass.getpass("Provide your Discord Token ---> ")
+# 
+# if "GROQ_API_KEY" not in os.environ:
+#     os.environ["GROQ_API_KEY"] = getpass.getpass("Provide your Groq API Key ---> ")
 
 DISCORD_TOKEN=os.environ["DISCORD_TOKEN"]
 GROQ_API_KEY=os.environ["GROQ_API_KEY"]
