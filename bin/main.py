@@ -7,7 +7,7 @@ import asyncio
 
 from help_cog import help_cog
 from music_cog import music_cog
-from chat_cog import chat_cog
+from chat_cog import ChatCog as chat_cog
 
 from dotenv import load_dotenv
 load_dotenv()
