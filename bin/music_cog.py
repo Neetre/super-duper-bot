@@ -37,6 +37,8 @@ class music_cog(commands.Cog):
         # Create a ThreadPoolExecutor for background tasks
         self.thread_pool = concurrent.futures.ThreadPoolExecutor(max_workers=3)
         
+        self.song_list = []
+        
     async def search_spotify(self, query):
         try:
             if 'open.spotify.com/track/' in query:
@@ -123,15 +125,38 @@ class music_cog(commands.Cog):
         
         return {'source': audio_url, 'title': info['title']}
 
-    async def play_next(self):
-        if not self.music_queue.empty():
+    def play_next(self):
+        if len(self.music_queue) > 0:
+            self.is_playing = True
+
+            m_url = self.music_queue[0][0]['source']
+            self.music_queue.get()
+
+            self.vc.play(discord.FFmpegPCMAudio(m_url, **self.FFMPEG_OPTIONS), after=lambda e: self.play_next())
+        else:
+            self.is_playing = False
+
+    async def play_music(self):
+        while True:
+            if self.vc is None or not self.vc.is_connected():
+                self.is_playing = False
+                break
+
+            if self.is_paused:
+                await asyncio.sleep(2)
+                continue
+
+            if self.music_queue.empty():
+                self.is_playing = False
+                await asyncio.sleep(2)
+                continue
+
             self.is_playing = True
 
             song, voice_channel = await self.music_queue.get()
+            self.song_list.pop(0)  # Remove the song from our tracking list
 
-            if self.vc is None or not self.vc.is_connected():
-                self.vc = await voice_channel.connect()
-            else:
+            if self.vc.channel != voice_channel:
                 await self.vc.move_to(voice_channel)
 
             # Use run_in_executor to run FFmpeg in a separate thread
@@ -141,17 +166,10 @@ class music_cog(commands.Cog):
                 lambda: discord.FFmpegPCMAudio(song['source'], **self.FFMPEG_OPTIONS)
             )
 
-            self.vc.play(audio_source, after=lambda e: asyncio.run_coroutine_threadsafe(self.play_next(), self.bot.loop))
+            self.vc.play(audio_source, after=lambda e: print('Player error: %s' % e) if e else None)
 
             await self.bot.change_presence(activity=discord.Game(name=song['title']))
-        else:
-            self.is_playing = False
-
-    async def play_music(self, ctx):
-        if self.vc is None or not self.vc.is_connected():
-            self.vc = await self.music_queue[0][1].connect()
-
-        await self.play_next()
+            await asyncio.sleep(0.5)
 
     async def download_remaining_songs(self):
         while self.is_playing and len(self.music_queue) > 0:
@@ -183,6 +201,7 @@ class music_cog(commands.Cog):
                         song = await self.bot.loop.run_in_executor(self.thread_pool, self.search_yt, track)
                         if song:
                             await self.music_queue.put([song, voice_channel])
+                            self.song_list.append(song['title'])  # Add to our tracking list
                     await ctx.send(f"Added {len(result)} songs from Spotify playlist to the queue.")
                 else:
                     song = result
@@ -194,9 +213,11 @@ class music_cog(commands.Cog):
             else:
                 await ctx.send(f"Added {song['title']} to the queue.")
                 await self.music_queue.put([song, voice_channel])
+                self.song_list.append(song['title'])  # Add to our tracking list
                 
             if not self.is_playing:
-                await self.play_music(ctx)
+                self.is_playing = True
+                self.bot.loop.create_task(self.play_music())
 
     @commands.command(name='pause', help='Pauses the song')
     async def pause(self, ctx, *args):
@@ -234,22 +255,29 @@ class music_cog(commands.Cog):
             await self.play_next()
 
     @commands.command(name='queue', aliases=['q'], help='Shows the queue')
-    async def queue(self, ctx, *args):
-        retval= ''
-
-        for i in range(0, len(self.music_queue)):
-            retval += f"{i+1}. {self.music_queue[i][0]['title']}\n"
-
-        if retval != "":
-            await ctx.send(retval)
-        else:
+    async def queue(self, ctx):
+        if not self.song_list:
             await ctx.send("No music in queue.")
+            return
 
-    @commands.command(name='clear', hepl='Clears the queue')
-    async def clear(self, ctx, *args):
+        queue_embed = discord.Embed(title="Music Queue", color=discord.Color.blue())
+        for i, song_title in enumerate(self.song_list, start=1):
+            queue_embed.add_field(name=f"{i}.", value=song_title, inline=False)
+
+        await ctx.send(embed=queue_embed)
+
+    @commands.command(name='clear', help='Clears the queue')
+    async def clear(self, ctx):
         if self.vc is not None and self.vc.is_playing():
             self.vc.stop()
-        self.music_queue = []
+        
+        # Clear the asyncio.Queue
+        while not self.music_queue.empty():
+            await self.music_queue.get()
+        
+        # Clear our tracking list
+        self.song_list.clear()
+        
         await ctx.send("Queue cleared.")
 
     @commands.command(name='leave', aliases=['l'], help="Leaves the voice channel")
