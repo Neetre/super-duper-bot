@@ -8,6 +8,7 @@ import asyncio
 from help_cog import help_cog
 from music_cog import music_cog
 from chat_cog import ChatCog as chat_cog
+from cache_cog import cache_cog
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -33,6 +34,7 @@ def main():
     loop.run_until_complete(bot.add_cog(help_cog(bot)))
     loop.run_until_complete(bot.add_cog(music_cog(bot, SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET)))
     loop.run_until_complete(bot.add_cog(chat_cog(bot, GROQ_API_KEY)))
+    loop.run_until_complete(bot.add_cog(cache_cog(bot, cache_dir='./cache', cache_size=100, cache_expiry=7*24*60*60)))
 
     bot.run(DISCORD_TOKEN)
 

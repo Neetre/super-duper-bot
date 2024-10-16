@@ -38,6 +38,8 @@ class music_cog(commands.Cog):
         self.thread_pool = concurrent.futures.ThreadPoolExecutor(max_workers=3)
         
         self.song_list = []
+
+        self.cache_cog = self.bot.get_cog('cache_cog')
         
     async def search_spotify(self, query):
         try:
@@ -105,7 +107,11 @@ class music_cog(commands.Cog):
         if not self.is_playing:
             await self.play_music(ctx)
 
-    def search_yt(self, item):
+    async def search_yt(self, item):
+        cache_hit = await self.cache_cog.get_from_cache(item)
+        if cache_hit:
+            return {'source': cache_hit['file_path'], 'title': cache_hit['title']}
+        
         with YoutubeDL(self.YDL_OPTIONS) as ydl:
             try:
                 info = ydl.extract_info(f"ytsearch:{item}", download=False)['entries'][0]
@@ -123,7 +129,11 @@ class music_cog(commands.Cog):
             logging.error("No audio format found for the given video")
             return False
         
-        return {'source': audio_url, 'title': info['title']}
+        song_info = {'source': audio_url, 'title': info['title']}
+        
+        await self.cache_cog.add_to_cache(item, song_info)
+        
+        return song_info
 
     async def play_next(self):
         if not self.music_queue.empty():
@@ -166,12 +176,17 @@ class music_cog(commands.Cog):
             else:
                 await self.vc.move_to(voice_channel)
 
-            # Use run_in_executor to run FFmpeg in a separate thread
-            loop = asyncio.get_event_loop()
-            audio_source = await loop.run_in_executor(
-                self.thread_pool,
-                lambda: discord.FFmpegPCMAudio(song['source'], **self.FFMPEG_OPTIONS)
-            )
+            # Check if the song is cached
+            cache_hit = await self.cache_cog.get_from_cache(song['title'])
+            if cache_hit:
+                audio_source = discord.FFmpegPCMAudio(cache_hit['file_path'], **self.FFMPEG_OPTIONS)
+            else:
+                # Use run_in_executor to run FFmpeg in a separate thread
+                loop = asyncio.get_event_loop()
+                audio_source = await loop.run_in_executor(
+                    self.thread_pool,
+                    lambda: discord.FFmpegPCMAudio(song['source'], **self.FFMPEG_OPTIONS)
+                )
 
             self.vc.play(audio_source, after=lambda e: asyncio.run_coroutine_threadsafe(self.play_next(), self.bot.loop))
 
