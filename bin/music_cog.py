@@ -38,8 +38,6 @@ class music_cog(commands.Cog):
         self.thread_pool = concurrent.futures.ThreadPoolExecutor(max_workers=3)
         
         self.song_list = []
-
-        self.cache_cog = self.bot.get_cog('cache_cog')
         
     async def search_spotify(self, query):
         try:
@@ -109,11 +107,12 @@ class music_cog(commands.Cog):
 
     async def search_yt(self, item):
         # First, check if the item is in the cache
-        cache_hit = await self.cache_cog.get_from_cache(item)
-        if cache_hit:
-            return {'source': cache_hit['file_path'], 'title': cache_hit['title']}
+        if self.cache_cog:
+            cache_hit = await self.cache_cog.get_from_cache(item)
+            if cache_hit:
+                return {'source': cache_hit['file_path'], 'title': cache_hit['title']}
 
-        # If not in cache, proceed with YouTube search
+        # If not in cache or cache_cog is not available, proceed with YouTube search
         try:
             # Run YoutubeDL in a separate thread to avoid blocking
             loop = asyncio.get_event_loop()
@@ -131,8 +130,9 @@ class music_cog(commands.Cog):
             
             song_info = {'source': audio_url, 'title': info['title']}
             
-            # Add the song to the cache
-            await self.cache_cog.add_to_cache(item, song_info)
+            # Add the song to the cache if cache_cog is available
+            if self.cache_cog:
+                await self.cache_cog.add_to_cache(item, song_info)
             
             return song_info
         except Exception as e:
