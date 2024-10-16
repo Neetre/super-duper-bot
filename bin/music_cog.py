@@ -38,6 +38,7 @@ class music_cog(commands.Cog):
         self.thread_pool = concurrent.futures.ThreadPoolExecutor(max_workers=3)
         
         self.song_list = []
+        self.cache_cog = self.bot.get_cog('cache_cog')
         
     async def search_spotify(self, query):
         try:
