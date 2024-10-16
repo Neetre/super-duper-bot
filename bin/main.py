@@ -22,13 +22,16 @@ load_dotenv()
 DISCORD_TOKEN=os.environ["DISCORD_TOKEN"]
 GROQ_API_KEY=os.environ["GROQ_API_KEY"]
 
+SPOTIFY_CLIENT_ID=os.environ["SPOTIFY_CLIENT_ID"]
+SPOTIFY_CLIENT_SECRET=os.environ["SPOTIFY_CLIENT_SECRET"]
+
 def main():
     bot = commands.Bot(command_prefix='!', intents=discord.Intents.all())
     bot.remove_command('help')
     loop = asyncio.get_event_loop()
 
     loop.run_until_complete(bot.add_cog(help_cog(bot)))
-    loop.run_until_complete(bot.add_cog(music_cog(bot)))
+    loop.run_until_complete(bot.add_cog(music_cog(bot, SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET)))
     loop.run_until_complete(bot.add_cog(chat_cog(bot, GROQ_API_KEY)))
 
     bot.run(DISCORD_TOKEN)

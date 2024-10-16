@@ -3,15 +3,18 @@ from discord.ext import commands
 from yt_dlp import YoutubeDL
 import logging
 import asyncio
+import spotipy
+from spotipy.oauth2 import SpotifyClientCredentials
+import concurrent.futures
 
 
 class music_cog(commands.Cog):
-    def __init__(self, bot):
+    def __init__(self, bot, SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET):
         self.bot = bot
         self.is_playing = False
         self.is_paused = False
 
-        self.music_queue = []
+        self.music_queue = asyncio.Queue()
         self.YDL_OPTIONS = {
             'format': 'bestaudio/best',
             'postprocessors': [{
@@ -26,6 +29,35 @@ class music_cog(commands.Cog):
             'options': '-vn -nostdin'
         }
         self.vc = None
+        
+        # Initialize Spotify client
+        client_credentials_manager = SpotifyClientCredentials(client_id=SPOTIFY_CLIENT_ID, client_secret=SPOTIFY_CLIENT_SECRET)
+        self.sp = spotipy.Spotify(client_credentials_manager=client_credentials_manager)
+
+        # Create a ThreadPoolExecutor for background tasks
+        self.thread_pool = concurrent.futures.ThreadPoolExecutor(max_workers=3)
+        
+    async def search_spotify(self, query):
+        try:
+            if 'open.spotify.com/track/' in query:
+                track_id = query.split('/')[-1].split('?')[0]
+                track = self.sp.track(track_id)
+                search_query = f"{track['name']} {track['artists'][0]['name']}"
+            elif 'open.spotify.com/playlist/' in query:
+                playlist_id = query.split('/')[-1].split('?')[0]
+                playlist = self.sp.playlist(playlist_id)
+                tracks = []
+                for item in playlist['tracks']['items']:
+                    track = item['track']
+                    tracks.append(f"{track['name']} {track['artists'][0]['name']}")
+                return tracks
+            else:
+                search_query = query
+
+            return await self.search_yt(search_query)
+        except Exception as e:
+            logging.error(f"Error occurred while searching Spotify: {e}")
+            return False
 
     async def search_playlist_yt(self, item):
         with YoutubeDL(self.YDL_OPTIONS) as ydl:
@@ -71,7 +103,7 @@ class music_cog(commands.Cog):
         if not self.is_playing:
             await self.play_music(ctx)
 
-    async def search_yt(self, item):
+    def search_yt(self, item):
         with YoutubeDL(self.YDL_OPTIONS) as ydl:
             try:
                 info = ydl.extract_info(f"ytsearch:{item}", download=False)['entries'][0]
@@ -96,32 +128,45 @@ class music_cog(commands.Cog):
             self.is_playing = True
 
             m_url = self.music_queue[0][0]['source']
-            self.music_queue.pop(0)
+            self.music_queue.get()
 
             self.vc.play(discord.FFmpegPCMAudio(m_url, **self.FFMPEG_OPTIONS), after=lambda e: self.play_next())
         else:
             self.is_playing = False
 
-    async def play_music(self, ctx):
-        if len(self.music_queue) > 0:
+    async def play_music(self):
+        while True:
+            if self.vc is None or not self.vc.is_connected():
+                self.is_playing = False
+                break
+
+            if self.is_paused:
+                await asyncio.sleep(2)
+                continue
+
+            if self.music_queue.empty():
+                self.is_playing = False
+                await asyncio.sleep(2)
+                continue
+
             self.is_playing = True
 
-            m_url = self.music_queue[0][0]['source']
+            song, voice_channel = await self.music_queue.get()
 
-            if self.vc is None or not self.vc.is_connected():
-                self.vc = await self.music_queue[0][1].connect()
-                if self.vc is None:
-                    await ctx.send("Error connecting to voice channel.")
-                    return
-            else:
-                await self.vc.move_to(self.music_queue[0][1])
+            if self.vc.channel != voice_channel:
+                await self.vc.move_to(voice_channel)
 
-            self.music_queue.pop(0)
+            # Use run_in_executor to run FFmpeg in a separate thread
+            loop = asyncio.get_event_loop()
+            audio_source = await loop.run_in_executor(
+                self.thread_pool,
+                lambda: discord.FFmpegPCMAudio(song['source'], **self.FFMPEG_OPTIONS)
+            )
 
-            self.vc.play(discord.FFmpegPCMAudio(m_url, **self.FFMPEG_OPTIONS), after=lambda e: self.play_next())
+            self.vc.play(audio_source, after=lambda e: print('Player error: %s' % e) if e else None)
 
-            # Start downloading the rest of the playlist while playing
-            asyncio.create_task(self.download_remaining_songs())
+            await self.bot.change_presence(activity=discord.Game(name=song['title']))
+            await asyncio.sleep(0.5)
 
     async def download_remaining_songs(self):
         while self.is_playing and len(self.music_queue) > 0:
@@ -133,28 +178,41 @@ class music_cog(commands.Cog):
                     logging.error(f"Error occurred while downloading the song: {e}")
             await asyncio.sleep(1)  # Adjust sleep time if needed
 
-    @commands.command(name='play', aliases=['p', 'playing'], help='Plays the song from yt')
+    @commands.command(name='play', aliases=['p', 'playing'], help='Plays a song from YouTube or Spotify')
     async def play(self, ctx, *args):
         query = " ".join(args)
         voice_channel = ctx.author.voice.channel
         if voice_channel is None:
             await ctx.send("You are not in a voice channel!")
+            return
 
-        elif self.is_paused:
+        if self.is_paused:
             self.vc.resume()
-        
         else:
             await ctx.send("Searching 🔎")
             
-            song = await self.search_yt(query)
+            if 'open.spotify.com' in query:
+                result = await self.search_spotify(query)
+                if isinstance(result, list):  # It's a playlist
+                    for track in result:
+                        song = await self.bot.loop.run_in_executor(self.thread_pool, self.search_yt, track)
+                        if song:
+                            await self.music_queue.put([song, voice_channel])
+                    await ctx.send(f"Added {len(result)} songs from Spotify playlist to the queue.")
+                else:
+                    song = result
+            else:
+                song = await self.bot.loop.run_in_executor(self.thread_pool, self.search_yt, query)
 
             if not song:
                 await ctx.send("Could not download the song. Incorrect format try another keyword")
             else:
                 await ctx.send(f"Added {song['title']} to the queue.")
-                self.music_queue.append([song, voice_channel])
-                if not self.is_playing:
-                    await self.play_music(ctx)
+                await self.music_queue.put([song, voice_channel])
+                
+            if not self.is_playing:
+                self.is_playing = True
+                self.bot.loop.create_task(self.play_music())
 
     @commands.command(name='pause', help='Pauses the song')
     async def pause(self, ctx, *args):
