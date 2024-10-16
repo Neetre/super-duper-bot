@@ -38,7 +38,6 @@ class music_cog(commands.Cog):
         self.thread_pool = concurrent.futures.ThreadPoolExecutor(max_workers=3)
         
         self.song_list = []
-        self.cache_cog = self.bot.get_cog('cache_cog')
         
     async def search_spotify(self, query):
         try:
@@ -106,43 +105,25 @@ class music_cog(commands.Cog):
         if not self.is_playing:
             await self.play_music(ctx)
 
-    async def search_yt(self, item):
-        # First, check if the item is in the cache
-        if self.cache_cog:
-            cache_hit = await self.cache_cog.get_from_cache(item)
-            if cache_hit:
-                return {'source': cache_hit['file_path'], 'title': cache_hit['title']}
-
-        # If not in cache or cache_cog is not available, proceed with YouTube search
-        try:
-            # Run YoutubeDL in a separate thread to avoid blocking
-            loop = asyncio.get_event_loop()
-            info = await loop.run_in_executor(self.thread_pool, self._youtube_search, item)
-            
-            audio_url = None
-            for format in info['formats']:
-                if format.get('acodec') and format['acodec'].lower() != 'none':
-                    audio_url = format['url']
-                    break
-            
-            if audio_url is None:
-                logging.error("No audio format found for the given video")
+    def search_yt(self, item):
+        with YoutubeDL(self.YDL_OPTIONS) as ydl:
+            try:
+                info = ydl.extract_info(f"ytsearch:{item}", download=False)['entries'][0]
+            except Exception as e:
+                logging.error(f"Error occurred while extracting info from YouTube: {e}")
                 return False
             
-            song_info = {'source': audio_url, 'title': info['title']}
-            
-            # Add the song to the cache if cache_cog is available
-            if self.cache_cog:
-                await self.cache_cog.add_to_cache(item, song_info)
-            
-            return song_info
-        except Exception as e:
-            logging.error(f"Error occurred while searching YouTube: {e}")
+        audio_url = None
+        for format in info['formats']:
+            if format.get('acodec') and format['acodec'].lower() != 'none':
+                audio_url = format['url']
+                break
+        
+        if audio_url is None:
+            logging.error("No audio format found for the given video")
             return False
-    
-    def _youtube_search(self, item):
-        with YoutubeDL(self.YDL_OPTIONS) as ydl:
-            return ydl.extract_info(f"ytsearch:{item}", download=False)['entries'][0]
+        
+        return {'source': audio_url, 'title': info['title']}
 
     async def play_next(self):
         if not self.music_queue.empty():
@@ -185,17 +166,12 @@ class music_cog(commands.Cog):
             else:
                 await self.vc.move_to(voice_channel)
 
-            # Check if the song is cached
-            cache_hit = await self.cache_cog.get_from_cache(song['title'])
-            if cache_hit:
-                audio_source = discord.FFmpegPCMAudio(cache_hit['file_path'], **self.FFMPEG_OPTIONS)
-            else:
-                # Use run_in_executor to run FFmpeg in a separate thread
-                loop = asyncio.get_event_loop()
-                audio_source = await loop.run_in_executor(
-                    self.thread_pool,
-                    lambda: discord.FFmpegPCMAudio(song['source'], **self.FFMPEG_OPTIONS)
-                )
+            # Use run_in_executor to run FFmpeg in a separate thread
+            loop = asyncio.get_event_loop()
+            audio_source = await loop.run_in_executor(
+                self.thread_pool,
+                lambda: discord.FFmpegPCMAudio(song['source'], **self.FFMPEG_OPTIONS)
+            )
 
             self.vc.play(audio_source, after=lambda e: asyncio.run_coroutine_threadsafe(self.play_next(), self.bot.loop))
 
@@ -230,7 +206,7 @@ class music_cog(commands.Cog):
                 result = await self.search_spotify(query)
                 if isinstance(result, list):  # It's a playlist
                     for track in result:
-                        song = await self.search_yt(track)
+                        song = await self.bot.loop.run_in_executor(self.thread_pool, self.search_yt, track)
                         if song:
                             await self.music_queue.put([song, voice_channel])
                             self.song_list.append(song['title'])  # Add to our tracking list
@@ -238,7 +214,7 @@ class music_cog(commands.Cog):
                 else:
                     song = result
             else:
-                song = await self.search_yt(query)
+                song = await self.bot.loop.run_in_executor(self.thread_pool, self.search_yt, query)
 
             if not song:
                 await ctx.send("Could not download the song. Incorrect format try another keyword")
