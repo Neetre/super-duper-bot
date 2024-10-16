@@ -108,32 +108,40 @@ class music_cog(commands.Cog):
             await self.play_music(ctx)
 
     async def search_yt(self, item):
+        # First, check if the item is in the cache
         cache_hit = await self.cache_cog.get_from_cache(item)
         if cache_hit:
             return {'source': cache_hit['file_path'], 'title': cache_hit['title']}
-        
-        with YoutubeDL(self.YDL_OPTIONS) as ydl:
-            try:
-                info = ydl.extract_info(f"ytsearch:{item}", download=False)['entries'][0]
-            except Exception as e:
-                logging.error(f"Error occurred while extracting info from YouTube: {e}")
+
+        # If not in cache, proceed with YouTube search
+        try:
+            # Run YoutubeDL in a separate thread to avoid blocking
+            loop = asyncio.get_event_loop()
+            info = await loop.run_in_executor(self.thread_pool, self._youtube_search, item)
+            
+            audio_url = None
+            for format in info['formats']:
+                if format.get('acodec') and format['acodec'].lower() != 'none':
+                    audio_url = format['url']
+                    break
+            
+            if audio_url is None:
+                logging.error("No audio format found for the given video")
                 return False
             
-        audio_url = None
-        for format in info['formats']:
-            if format.get('acodec') and format['acodec'].lower() != 'none':
-                audio_url = format['url']
-                break
-        
-        if audio_url is None:
-            logging.error("No audio format found for the given video")
+            song_info = {'source': audio_url, 'title': info['title']}
+            
+            # Add the song to the cache
+            await self.cache_cog.add_to_cache(item, song_info)
+            
+            return song_info
+        except Exception as e:
+            logging.error(f"Error occurred while searching YouTube: {e}")
             return False
-        
-        song_info = {'source': audio_url, 'title': info['title']}
-        
-        await self.cache_cog.add_to_cache(item, song_info)
-        
-        return song_info
+    
+    def _youtube_search(self, item):
+        with YoutubeDL(self.YDL_OPTIONS) as ydl:
+            return ydl.extract_info(f"ytsearch:{item}", download=False)['entries'][0]
 
     async def play_next(self):
         if not self.music_queue.empty():
@@ -221,7 +229,7 @@ class music_cog(commands.Cog):
                 result = await self.search_spotify(query)
                 if isinstance(result, list):  # It's a playlist
                     for track in result:
-                        song = await self.bot.loop.run_in_executor(self.thread_pool, self.search_yt, track)
+                        song = await self.search_yt(track)
                         if song:
                             await self.music_queue.put([song, voice_channel])
                             self.song_list.append(song['title'])  # Add to our tracking list
@@ -229,7 +237,7 @@ class music_cog(commands.Cog):
                 else:
                     song = result
             else:
-                song = await self.bot.loop.run_in_executor(self.thread_pool, self.search_yt, query)
+                song = await self.search_yt(query)
 
             if not song:
                 await ctx.send("Could not download the song. Incorrect format try another keyword")
