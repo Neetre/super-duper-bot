@@ -123,37 +123,15 @@ class music_cog(commands.Cog):
         
         return {'source': audio_url, 'title': info['title']}
 
-    def play_next(self):
-        if len(self.music_queue) > 0:
-            self.is_playing = True
-
-            m_url = self.music_queue[0][0]['source']
-            self.music_queue.get()
-
-            self.vc.play(discord.FFmpegPCMAudio(m_url, **self.FFMPEG_OPTIONS), after=lambda e: self.play_next())
-        else:
-            self.is_playing = False
-
-    async def play_music(self):
-        while True:
-            if self.vc is None or not self.vc.is_connected():
-                self.is_playing = False
-                break
-
-            if self.is_paused:
-                await asyncio.sleep(2)
-                continue
-
-            if self.music_queue.empty():
-                self.is_playing = False
-                await asyncio.sleep(2)
-                continue
-
+    async def play_next(self):
+        if not self.music_queue.empty():
             self.is_playing = True
 
             song, voice_channel = await self.music_queue.get()
 
-            if self.vc.channel != voice_channel:
+            if self.vc is None or not self.vc.is_connected():
+                self.vc = await voice_channel.connect()
+            else:
                 await self.vc.move_to(voice_channel)
 
             # Use run_in_executor to run FFmpeg in a separate thread
@@ -163,10 +141,17 @@ class music_cog(commands.Cog):
                 lambda: discord.FFmpegPCMAudio(song['source'], **self.FFMPEG_OPTIONS)
             )
 
-            self.vc.play(audio_source, after=lambda e: print('Player error: %s' % e) if e else None)
+            self.vc.play(audio_source, after=lambda e: asyncio.run_coroutine_threadsafe(self.play_next(), self.bot.loop))
 
             await self.bot.change_presence(activity=discord.Game(name=song['title']))
-            await asyncio.sleep(0.5)
+        else:
+            self.is_playing = False
+
+    async def play_music(self, ctx):
+        if self.vc is None or not self.vc.is_connected():
+            self.vc = await self.music_queue[0][1].connect()
+
+        await self.play_next()
 
     async def download_remaining_songs(self):
         while self.is_playing and len(self.music_queue) > 0:
@@ -211,8 +196,7 @@ class music_cog(commands.Cog):
                 await self.music_queue.put([song, voice_channel])
                 
             if not self.is_playing:
-                self.is_playing = True
-                self.bot.loop.create_task(self.play_music())
+                await self.play_music(ctx)
 
     @commands.command(name='pause', help='Pauses the song')
     async def pause(self, ctx, *args):
