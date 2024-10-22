@@ -30,6 +30,9 @@ class music_cog(commands.Cog):
         }
         self.vc = None
         
+        self.current_song = None  # Add this to track current song
+        self.is_repeating = False  # Add this for repeat state
+        
         # Initialize Spotify client
         client_credentials_manager = SpotifyClientCredentials(client_id=SPOTIFY_CLIENT_ID, client_secret=SPOTIFY_CLIENT_SECRET)
         self.sp = spotipy.Spotify(client_credentials_manager=client_credentials_manager)
@@ -151,19 +154,27 @@ class music_cog(commands.Cog):
 
     async def play_music(self):
         while True:
-            if self.music_queue.empty():
+            if self.vc is None or not self.vc.is_connected():
                 self.is_playing = False
+                break
+
+            if self.is_paused:
                 await asyncio.sleep(2)
                 continue
 
-            song, voice_channel = await self.music_queue.get()
-            self.song_list.pop(0)  # Remove the song from our tracking list
-
-            if self.vc is None or not self.vc.is_connected():
-                self.vc = await voice_channel.connect()
-                if not self.vc:
+            if not self.is_repeating:
+                if self.music_queue.empty():
+                    self.is_playing = False
+                    self.current_song = None
+                    await asyncio.sleep(2)
                     continue
-            else:
+                
+                self.current_song = await self.music_queue.get()
+            
+            self.is_playing = True
+            song, voice_channel = self.current_song
+
+            if self.vc.channel != voice_channel:
                 await self.vc.move_to(voice_channel)
 
             # Use run_in_executor to run FFmpeg in a separate thread
@@ -173,11 +184,20 @@ class music_cog(commands.Cog):
                 lambda: discord.FFmpegPCMAudio(song['source'], **self.FFMPEG_OPTIONS)
             )
 
-            self.vc.play(audio_source, after=lambda e: asyncio.run_coroutine_threadsafe(self.play_next(), self.bot.loop))
+            def after_playing(error):
+                if error:
+                    print(f'Player error: {error}')
+                asyncio.run_coroutine_threadsafe(
+                    self.bot.change_presence(activity=None),
+                    self.bot.loop
+                )
 
+            self.vc.play(audio_source, after=after_playing)
             await self.bot.change_presence(activity=discord.Game(name=song['title']))
-            self.is_playing = True
-            await asyncio.sleep(0.5)
+            
+            # Wait for the song to finish
+            while self.vc.is_playing() or self.is_paused:
+                await asyncio.sleep(1)
 
     async def download_remaining_songs(self):
         while self.is_playing and len(self.music_queue) > 0:
@@ -286,6 +306,20 @@ class music_cog(commands.Cog):
         self.song_list.clear()
         
         await ctx.send("Queue cleared.")
+
+    @commands.command(name='repeat', help='Toggles repeat for the current song')
+    async def repeat(self, ctx):
+        if self.vc is None or not self.vc.is_playing():
+            return await ctx.send("Not playing any song.")
+        
+        self.is_repeating = not self.is_repeating
+        
+        if self.is_repeating:
+            await ctx.send("🔁 Repeat mode enabled. Current song will repeat.")
+        else:
+            await ctx.send("➡️ Repeat mode disabled. Moving to next song.")
+            if self.vc.is_playing():
+                self.vc.stop()  # This will trigger the next song to play
 
     @commands.command(name='leave', aliases=['l'], help="Leaves the voice channel")
     async def leave(self, ctx, *args):
