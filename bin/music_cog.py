@@ -153,51 +153,55 @@ class music_cog(commands.Cog):
             self.is_playing = False
 
     async def play_music(self):
+        if self.vc is None or not self.vc.is_connected():
+            return
+            
         while True:
-            if self.vc is None or not self.vc.is_connected():
-                self.is_playing = False
-                break
-
-            if self.is_paused:
-                await asyncio.sleep(2)
-                continue
-
-            if not self.is_repeating:
+            if not self.is_playing and not self.is_paused:
                 if self.music_queue.empty():
-                    self.is_playing = False
-                    self.current_song = None
                     await asyncio.sleep(2)
                     continue
+                    
+                if not self.is_repeating:
+                    self.current_song = await self.music_queue.get()
                 
-                self.current_song = await self.music_queue.get()
+                if self.current_song is None:
+                    continue
+                    
+                song, voice_channel = self.current_song
+                
+                # Ensure we're in the right channel
+                if self.vc.channel != voice_channel:
+                    await self.vc.move_to(voice_channel)
+                
+                try:
+                    # Create audio source
+                    audio_source = discord.FFmpegPCMAudio(
+                        song['source'],
+                        **self.FFMPEG_OPTIONS
+                    )
+                    
+                    # Play the audio
+                    self.is_playing = True
+                    self.vc.play(audio_source, after=lambda e: self.bot.loop.create_task(self.song_finished(e)))
+                    await self.bot.change_presence(activity=discord.Game(name=song['title']))
+                    
+                except Exception as e:
+                    print(f"Error playing audio: {e}")
+                    self.is_playing = False
+                    continue
             
-            self.is_playing = True
-            song, voice_channel = self.current_song
-
-            if self.vc.channel != voice_channel:
-                await self.vc.move_to(voice_channel)
-
-            # Use run_in_executor to run FFmpeg in a separate thread
-            loop = asyncio.get_event_loop()
-            audio_source = await loop.run_in_executor(
-                self.thread_pool,
-                lambda: discord.FFmpegPCMAudio(song['source'], **self.FFMPEG_OPTIONS)
-            )
-
-            def after_playing(error):
-                if error:
-                    print(f'Player error: {error}')
-                asyncio.run_coroutine_threadsafe(
-                    self.bot.change_presence(activity=None),
-                    self.bot.loop
-                )
-
-            self.vc.play(audio_source, after=after_playing)
-            await self.bot.change_presence(activity=discord.Game(name=song['title']))
+            await asyncio.sleep(1)
             
-            # Wait for the song to finish
-            while self.vc.is_playing() or self.is_paused:
-                await asyncio.sleep(1)
+    async def song_finished(self, error):
+        if error:
+            print(f"Error in playback: {error}")
+        
+        self.is_playing = False
+        await self.bot.change_presence(activity=None)
+        
+        if not self.is_repeating:
+            self.current_song = None
 
     async def download_remaining_songs(self):
         while self.is_playing and len(self.music_queue) > 0:
@@ -216,35 +220,57 @@ class music_cog(commands.Cog):
         if voice_channel is None:
             await ctx.send("You are not in a voice channel!")
             return
+            
+        # Connect to voice channel if not already connected
+        if self.vc is None or not self.vc.is_connected():
+            try:
+                self.vc = await voice_channel.connect()
+            except Exception as e:
+                await ctx.send(f"Could not connect to voice channel: {str(e)}")
+                return
 
         if self.is_paused:
             self.vc.resume()
-        else:
-            await ctx.send("Searching 🔎")
+            return
             
+        await ctx.send("Searching 🔎")
+        
+        try:
             if 'open.spotify.com' in query:
                 result = await self.search_spotify(query)
                 if isinstance(result, list):  # It's a playlist
                     for track in result:
-                        song = await self.bot.loop.run_in_executor(self.thread_pool, self.search_yt, track)
+                        song = await self.bot.loop.run_in_executor(
+                            self.thread_pool, 
+                            self.search_yt, 
+                            track
+                        )
                         if song:
                             await self.music_queue.put([song, voice_channel])
-                            self.song_list.append(song['title'])  # Add to our tracking list
+                            self.song_list.append(song['title'])
                     await ctx.send(f"Added {len(result)} songs from Spotify playlist to the queue.")
                 else:
                     song = result
             else:
-                song = await self.bot.loop.run_in_executor(self.thread_pool, self.search_yt, query)
+                song = await self.bot.loop.run_in_executor(
+                    self.thread_pool,
+                    self.search_yt,
+                    query
+                )
 
             if not song:
                 await ctx.send("Could not download the song. Incorrect format try another keyword")
-            else:
-                await ctx.send(f"Added {song['title']} to the queue.")
-                await self.music_queue.put([song, voice_channel])
-                self.song_list.append(song['title'])  # Add to our tracking list
+                return
                 
+            await ctx.send(f"Added {song['title']} to the queue.")
+            await self.music_queue.put([song, voice_channel])
+            self.song_list.append(song['title'])
+            
             if not self.is_playing:
                 await self.play_music()
+                
+        except Exception as e:
+            await ctx.send(f"An error occurred: {str(e)}")
 
     @commands.command(name='pause', help='Pauses the song')
     async def pause(self, ctx, *args):
