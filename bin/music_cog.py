@@ -268,6 +268,7 @@ class music_cog(commands.Cog):
     async def stop(self, ctx, *args):
         if self.vc and self.vc.is_playing():
             self.is_playing = False
+            self.is_repeating = False  # Add this to disable repeat when stopping
             self.vc.stop()
             self.is_paused = False
             await ctx.send("Stopped ⏹️")
@@ -278,8 +279,9 @@ class music_cog(commands.Cog):
             return await ctx.send("Not connected to a voice channel.")
 
         if self.vc.is_playing():
+            self.is_repeating = False  # Add this to disable repeat when skipping
             self.vc.stop()
-        await self.play_next()
+            await ctx.send("⏭️ Skipped to next song")
 
     @commands.command(name='queue', aliases=['q'], help='Shows the queue')
     async def queue(self, ctx):
