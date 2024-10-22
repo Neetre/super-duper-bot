@@ -158,15 +158,17 @@ class music_cog(commands.Cog):
             
         while True:
             if not self.is_playing and not self.is_paused:
-                if self.music_queue.empty():
-                    await asyncio.sleep(2)
-                    continue
-                    
-                if not self.is_repeating:
+                # Check if we should repeat the current song
+                if self.is_repeating and self.current_song:
+                    # Just reuse current_song if repeating
+                    pass
+                # If not repeating, get next song from queue
+                elif not self.music_queue.empty():
                     self.current_song = await self.music_queue.get()
-                
-                if self.current_song is None:
-                    continue
+                else:
+                    if not self.current_song:  # No songs to play
+                        await asyncio.sleep(2)
+                        continue
                     
                 song, voice_channel = self.current_song
                 
@@ -184,11 +186,16 @@ class music_cog(commands.Cog):
                     # Play the audio
                     self.is_playing = True
                     self.vc.play(audio_source, after=lambda e: self.bot.loop.create_task(self.song_finished(e)))
-                    await self.bot.change_presence(activity=discord.Game(name=song['title']))
+                    
+                    # Update bot's presence with current song
+                    await self.bot.change_presence(activity=discord.Game(name=f"🎵 {song['title']}"))
                     
                 except Exception as e:
                     print(f"Error playing audio: {e}")
                     self.is_playing = False
+                    # If there was an error playing while repeating, disable repeat
+                    if self.is_repeating:
+                        self.is_repeating = False
                     continue
             
             await asyncio.sleep(1)
@@ -196,10 +203,13 @@ class music_cog(commands.Cog):
     async def song_finished(self, error):
         if error:
             print(f"Error in playback: {error}")
+            # Disable repeat if there was an error
+            self.is_repeating = False
         
         self.is_playing = False
         await self.bot.change_presence(activity=None)
         
+        # Only clear current_song if we're not repeating
         if not self.is_repeating:
             self.current_song = None
 
@@ -290,24 +300,28 @@ class music_cog(commands.Cog):
             self.vc.resume()
             await ctx.send("Resumed ▶️")
 
-    @commands.command(name='stop', help='Stops the song')
-    async def stop(self, ctx, *args):
-        if self.vc and self.vc.is_playing():
+    @commands.command(name='stop', help='Stops the music and clears the queue')
+    async def stop(self, ctx):
+        if self.vc and (self.is_playing or self.is_paused):
             self.is_playing = False
-            self.is_repeating = False  # Add this to disable repeat when stopping
+            self.is_repeating = False  # Disable repeat when stopping
+            self.current_song = None   # Clear current song
             self.vc.stop()
             self.is_paused = False
             await ctx.send("Stopped ⏹️")
 
-    @commands.command(name='skip', help='Skips the song')
+    @commands.command(name='skip', help='Skips the current song')
     async def skip(self, ctx):
         if self.vc is None:
             return await ctx.send("Not connected to a voice channel.")
 
-        if self.vc.is_playing():
-            self.is_repeating = False  # Add this to disable repeat when skipping
-            self.vc.stop()
-            await ctx.send("⏭️ Skipped to next song")
+        if not self.is_playing:
+            return await ctx.send("No song is currently playing.")
+
+        # Disable repeat when skipping
+        self.is_repeating = False
+        self.vc.stop()
+        await ctx.send("⏭️ Skipped to next song")
 
     @commands.command(name='queue', aliases=['q'], help='Shows the queue')
     async def queue(self, ctx):
@@ -337,17 +351,21 @@ class music_cog(commands.Cog):
 
     @commands.command(name='repeat', help='Toggles repeat for the current song')
     async def repeat(self, ctx):
-        if self.vc is None or not self.vc.is_playing():
-            return await ctx.send("Not playing any song.")
+        if self.vc is None:
+            return await ctx.send("Not connected to a voice channel.")
+            
+        if not self.current_song:
+            return await ctx.send("No song is currently playing.")
         
         self.is_repeating = not self.is_repeating
         
         if self.is_repeating:
-            await ctx.send("🔁 Repeat mode enabled. Current song will repeat.")
+            await ctx.send(f"🔁 Repeat enabled: **{self.current_song[0]['title']}**")
         else:
-            await ctx.send("➡️ Repeat mode disabled. Moving to next song.")
-            if self.vc.is_playing():
-                self.vc.stop()  # This will trigger the next song to play
+            await ctx.send("➡️ Repeat disabled. Will continue with queue.")
+            # If we're currently playing, stop to move to next song
+            if self.is_playing:
+                self.vc.stop()
 
     @commands.command(name='leave', aliases=['l'], help="Leaves the voice channel")
     async def leave(self, ctx, *args):
